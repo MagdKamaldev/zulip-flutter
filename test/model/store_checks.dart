@@ -3,6 +3,7 @@ import 'package:zulip/api/core.dart';
 import 'package:zulip/api/model/initial_snapshot.dart';
 import 'package:zulip/api/model/model.dart';
 import 'package:zulip/model/autocomplete.dart';
+import 'package:zulip/model/binding.dart';
 import 'package:zulip/model/database.dart';
 import 'package:zulip/model/recent_dm_conversations.dart';
 import 'package:zulip/model/settings.dart';
@@ -31,6 +32,9 @@ extension GlobalStoreChecks on Subject<GlobalStore> {
 
 extension GlobalSettingsDataChecks on Subject<GlobalSettingsData> {
   Subject<ThemeSetting?> get themeSetting => has((x) => x.themeSetting, 'themeSetting');
+  Subject<BrowserPreference?> get browserPreference => has((x) => x.browserPreference, 'browserPreference');
+  Subject<BrowserPreference> get effectiveBrowserPreference => has((x) => x.effectiveBrowserPreference, 'effectiveBrowserPreference');
+  Subject<UrlLaunchMode> getUrlLaunchMode(Uri url) => has((x) => x.getUrlLaunchMode(url), 'getUrlLaunchMode');
 }
 
 extension PerAccountStoreChecks on Subject<PerAccountStore> {
