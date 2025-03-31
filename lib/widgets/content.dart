@@ -22,6 +22,7 @@ import 'inset_shadow.dart';
 import 'lightbox.dart';
 import 'message_list.dart';
 import 'poll.dart';
+import 'scrolling.dart';
 import 'store.dart';
 import 'text.dart';
 
@@ -796,33 +797,6 @@ class _CodeBlockContainer extends StatelessWidget {
   }
 }
 
-class SingleChildScrollViewWithScrollbar extends StatefulWidget {
-  const SingleChildScrollViewWithScrollbar(
-    {super.key, required this.scrollDirection, required this.child});
-
-  final Axis scrollDirection;
-  final Widget child;
-
-  @override
-  State<SingleChildScrollViewWithScrollbar> createState() =>
-    _SingleChildScrollViewWithScrollbarState();
-}
-
-class _SingleChildScrollViewWithScrollbarState
-    extends State<SingleChildScrollViewWithScrollbar> {
-  final ScrollController controller = ScrollController();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scrollbar(
-      controller: controller,
-      child: SingleChildScrollView(
-        controller: controller,
-        scrollDirection: widget.scrollDirection,
-        child: widget.child));
-  }
-}
-
 class MathBlock extends StatelessWidget {
   const MathBlock({super.key, required this.node});
 
@@ -830,10 +804,11 @@ class MathBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final contentTheme = ContentTheme.of(context);
     return _CodeBlockContainer(
-      borderColor: ContentTheme.of(context).colorMathBlockBorder,
+      borderColor: contentTheme.colorMathBlockBorder,
       child: Text.rich(TextSpan(
-        style: ContentTheme.of(context).codeBlockTextStyles.plain,
+        style: contentTheme.codeBlockTextStyles.plain,
         children: [TextSpan(text: node.texSource)])));
   }
 }

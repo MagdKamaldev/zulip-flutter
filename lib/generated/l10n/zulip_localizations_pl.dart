@@ -644,6 +644,12 @@ class ZulipLocalizationsPl extends ZulipLocalizations {
   String get pollWidgetOptionsMissing => 'Ta sonda nie ma opcji do wyboru.';
 
   @override
+  String get experimentalFeatureSettingsPageTitle => 'Funkcje eksperymentalne';
+
+  @override
+  String get experimentalFeatureSettingsWarning => 'W ten sposób aktywujesz funkcje, które są w fazie testów. Mogą one nie działać lub powodować problemy z tym co bez nich działa poprawnie.\n\nTo ustawienie przewidziane jest dla tych, którzy pracują nad ulepszeniem aplikacji Zulip.';
+
+  @override
   String get errorNotificationOpenTitle => 'Otwieranie powiadomienia bez powodzenia';
 
   @override
