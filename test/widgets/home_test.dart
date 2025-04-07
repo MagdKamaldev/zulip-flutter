@@ -2,7 +2,6 @@ import 'package:checks/checks.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_checks/flutter_checks.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zulip/api/model/events.dart';
 import 'package:zulip/model/actions.dart';
 import 'package:zulip/model/narrow.dart';
 import 'package:zulip/model/store.dart';
@@ -72,8 +71,8 @@ void main () {
     testWidgets('preserve states when switching between views', (tester) async {
       await prepare(tester);
       await store.addUser(eg.otherUser);
-      await store.handleEvent(MessageEvent(
-        id: 0, message: eg.dmMessage(from: eg.otherUser, to: [eg.selfUser])));
+      await store.addMessage(
+        eg.dmMessage(from: eg.otherUser, to: [eg.selfUser]));
       await tester.pump();
 
       check(find.byIcon(ZulipIcons.arrow_down)).findsExactly(2);
@@ -477,4 +476,8 @@ void main () {
     // access to the account being logged out.
     check(testBinding.globalStore).accountIds.isEmpty();
   });
+
+  // TODO end-to-end widget test that checks the error dialog when connecting
+  //   to an ancient server:
+  //     https://github.com/zulip/zulip-flutter/pull/1410#discussion_r1999991512
 }

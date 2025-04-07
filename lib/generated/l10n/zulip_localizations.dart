@@ -12,6 +12,7 @@ import 'zulip_localizations_nb.dart';
 import 'zulip_localizations_pl.dart';
 import 'zulip_localizations_ru.dart';
 import 'zulip_localizations_sk.dart';
+import 'zulip_localizations_uk.dart';
 
 // ignore_for_file: type=lint
 
@@ -102,7 +103,8 @@ abstract class ZulipLocalizations {
     Locale('nb'),
     Locale('pl'),
     Locale('ru'),
-    Locale('sk')
+    Locale('sk'),
+    Locale('uk')
   ];
 
   /// Title for About Zulip page.
@@ -693,6 +695,12 @@ abstract class ZulipLocalizations {
   /// **'Close'**
   String get dialogClose;
 
+  /// Button label in error dialogs to open a web page with more information.
+  ///
+  /// In en, this message translates to:
+  /// **'Learn more'**
+  String get errorDialogLearnMore;
+
   /// Button label in error dialogs to acknowledge the error and close the dialog.
   ///
   /// In en, this message translates to:
@@ -818,6 +826,12 @@ abstract class ZulipLocalizations {
   /// In en, this message translates to:
   /// **'Topics are required in this organization.'**
   String get topicValidationErrorMandatoryButEmpty;
+
+  /// Error message in the dialog for when the Zulip Server version is unsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'{url} is running Zulip Server {zulipVersion}, which is unsupported. The minimum supported version is Zulip Server {minSupportedZulipVersion}.'**
+  String errorServerVersionUnsupportedMessage(String url, String zulipVersion, String minSupportedZulipVersion);
 
   /// Error message in the dialog for invalid API key.
   ///
@@ -1285,7 +1299,7 @@ class _ZulipLocalizationsDelegate extends LocalizationsDelegate<ZulipLocalizatio
   }
 
   @override
-  bool isSupported(Locale locale) => <String>['ar', 'en', 'ja', 'nb', 'pl', 'ru', 'sk'].contains(locale.languageCode);
+  bool isSupported(Locale locale) => <String>['ar', 'en', 'ja', 'nb', 'pl', 'ru', 'sk', 'uk'].contains(locale.languageCode);
 
   @override
   bool shouldReload(_ZulipLocalizationsDelegate old) => false;
@@ -1303,6 +1317,7 @@ ZulipLocalizations lookupZulipLocalizations(Locale locale) {
     case 'pl': return ZulipLocalizationsPl();
     case 'ru': return ZulipLocalizationsRu();
     case 'sk': return ZulipLocalizationsSk();
+    case 'uk': return ZulipLocalizationsUk();
   }
 
   throw FlutterError(

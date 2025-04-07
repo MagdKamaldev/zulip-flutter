@@ -349,6 +349,9 @@ class ZulipLocalizationsPl extends ZulipLocalizations {
   String get dialogClose => 'Zamknij';
 
   @override
+  String get errorDialogLearnMore => 'Dowiedz się więcej';
+
+  @override
   String get errorDialogContinue => 'OK';
 
   @override
@@ -412,6 +415,11 @@ class ZulipLocalizationsPl extends ZulipLocalizations {
 
   @override
   String get topicValidationErrorMandatoryButEmpty => 'Wątki są wymagane przez tę organizację.';
+
+  @override
+  String errorServerVersionUnsupportedMessage(String url, String zulipVersion, String minSupportedZulipVersion) {
+    return '$url uruchamia Zulip Server $zulipVersion, który nie jest obsługiwany. Minimalna obsługiwana wersja to Zulip Server $minSupportedZulipVersion.';
+  }
 
   @override
   String errorInvalidApiKeyMessage(String url) {
@@ -644,10 +652,10 @@ class ZulipLocalizationsPl extends ZulipLocalizations {
   String get pollWidgetOptionsMissing => 'Ta sonda nie ma opcji do wyboru.';
 
   @override
-  String get experimentalFeatureSettingsPageTitle => 'Experimental features';
+  String get experimentalFeatureSettingsPageTitle => 'Funkcje eksperymentalne';
 
   @override
-  String get experimentalFeatureSettingsWarning => 'These options enable features which are still under development and not ready. They may not work, and may cause issues in other areas of the app.\n\nThe purpose of these settings is for experimentation by people working on developing Zulip.';
+  String get experimentalFeatureSettingsWarning => 'W ten sposób aktywujesz funkcje, które są w fazie testów. Mogą one nie działać lub powodować problemy z tym co bez nich działa poprawnie.\n\nTo ustawienie przewidziane jest dla tych, którzy pracują nad ulepszeniem aplikacji Zulip.';
 
   @override
   String get errorNotificationOpenTitle => 'Otwieranie powiadomienia bez powodzenia';

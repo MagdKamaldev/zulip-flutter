@@ -199,14 +199,30 @@ abstract class GlobalStore extends ChangeNotifier {
     final PerAccountStore store;
     try {
       store = await doLoadPerAccount(accountId);
+    } on AccountNotFoundException {
+      rethrow;
     } catch (e) {
+      final account = getAccount(accountId);
+      assert(account != null); // doLoadPerAccount would have thrown AccountNotFoundException
+      final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
       switch (e) {
+        case _ServerVersionUnsupportedException():
+          reportErrorToUserModally(
+            zulipLocalizations.errorCouldNotConnectTitle,
+            message: zulipLocalizations.errorServerVersionUnsupportedMessage(
+              account!.realmUrl.toString(),
+              e.data.zulipVersion,
+              kMinSupportedZulipVersion),
+            learnMoreButtonUrl: kServerSupportDocUrl);
+          // The important thing is to tear down per-account UI,
+          // and logOutAccount conveniently handles that already.
+          // It's not ideal to force the user to reauthenticate when they retry,
+          // and we can revisit that later if needed.
+          await logOutAccount(this, accountId);
+          throw AccountNotFoundException();
         case HttpException(httpStatus: 401):
           // The API key is invalid and the store can never be loaded
           // unless the user retries manually.
-          final account = getAccount(accountId);
-          assert(account != null); // doLoadPerAccount would have thrown AccountNotFoundException
-          final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
           reportErrorToUserModally(
             zulipLocalizations.errorCouldNotConnectTitle,
             message: zulipLocalizations.errorInvalidApiKeyMessage(
@@ -275,6 +291,17 @@ abstract class GlobalStore extends ChangeNotifier {
     return result;
   }
 
+  /// Update an account with [ZulipVersionData], returning the new version.
+  ///
+  /// The account must already exist in the store.
+  Future<Account> updateZulipVersionData(int accountId, ZulipVersionData data) async {
+    assert(_accounts.containsKey(accountId));
+    return updateAccount(accountId, AccountsCompanion(
+      zulipVersion: Value(data.zulipVersion),
+      zulipMergeBase: Value(data.zulipMergeBase),
+      zulipFeatureLevel: Value(data.zulipFeatureLevel)));
+  }
+
   /// Update an account in the underlying data store.
   Future<void> doUpdateAccount(int accountId, AccountsCompanion data);
 
@@ -300,6 +327,24 @@ abstract class GlobalStore extends ChangeNotifier {
 
 class AccountNotFoundException implements Exception {}
 
+/// A bundle of items that are useful to [PerAccountStore] and its substores.
+class CorePerAccountStore {
+  CorePerAccountStore({required this.connection});
+
+  final ApiConnection connection; // TODO(#135): update zulipFeatureLevel with events
+}
+
+/// A base class for [PerAccountStore] and its substores,
+/// with getters providing the items in [CorePerAccountStore].
+abstract class PerAccountStoreBase {
+  PerAccountStoreBase({required CorePerAccountStore core})
+    : _core = core;
+
+  final CorePerAccountStore _core;
+
+  ApiConnection get connection => _core.connection;
+}
+
 /// Store for the user's data for a given Zulip account.
 ///
 /// This should always have a consistent snapshot of the state on the server,
@@ -308,7 +353,7 @@ class AccountNotFoundException implements Exception {}
 /// This class does not attempt to poll an event queue
 /// to keep the data up to date.  For that behavior, see
 /// [UpdateMachine].
-class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, ChannelStore, MessageStore {
+class PerAccountStore extends PerAccountStoreBase with ChangeNotifier, EmojiStore, UserStore, ChannelStore, MessageStore {
   /// Construct a store for the user's data, starting from the given snapshot.
   ///
   /// The global store must already have been updated with
@@ -333,11 +378,20 @@ class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, Channel
     connection ??= globalStore.apiConnectionFromAccount(account);
     assert(connection.zulipFeatureLevel == account.zulipFeatureLevel);
 
+    final queueId = initialSnapshot.queueId;
+    if (queueId == null) {
+      // The queueId is optional in the type, but should only be missing in the
+      // case of unauthenticated access to a web-public realm.  We authenticated.
+      throw Exception("bad initial snapshot: missing queueId");
+    }
+
     final realmUrl = account.realmUrl;
+    final core = CorePerAccountStore(connection: connection);
     final channels = ChannelStoreImpl(initialSnapshot: initialSnapshot);
     return PerAccountStore._(
       globalStore: globalStore,
-      connection: connection,
+      core: core,
+      queueId: queueId,
       realmUrl: realmUrl,
       realmWildcardMentionPolicy: initialSnapshot.realmWildcardMentionPolicy,
       realmMandatoryTopics: initialSnapshot.realmMandatoryTopics,
@@ -366,7 +420,7 @@ class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, Channel
         typingStartedExpiryPeriod: Duration(milliseconds: initialSnapshot.serverTypingStartedExpiryPeriodMilliseconds),
       ),
       channels: channels,
-      messages: MessageStoreImpl(),
+      messages: MessageStoreImpl(core: core),
       unreads: Unreads(
         initial: initialSnapshot.unreadMsgs,
         selfUserId: account.userId,
@@ -380,7 +434,8 @@ class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, Channel
 
   PerAccountStore._({
     required GlobalStore globalStore,
-    required this.connection,
+    required super.core,
+    required this.queueId,
     required this.realmUrl,
     required this.realmWildcardMentionPolicy,
     required this.realmMandatoryTopics,
@@ -402,7 +457,7 @@ class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, Channel
     required this.recentDmConversationsView,
     required this.recentSenders,
   }) : assert(realmUrl == globalStore.getAccount(accountId)!.realmUrl),
-       assert(realmUrl == connection.realmUrl),
+       assert(realmUrl == core.connection.realmUrl),
        assert(emoji.realmUrl == realmUrl),
        _globalStore = globalStore,
        _realmEmptyTopicDisplayName = realmEmptyTopicDisplayName,
@@ -418,8 +473,8 @@ class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, Channel
   // Where data comes from in the first place.
 
   final GlobalStore _globalStore;
-  final ApiConnection connection; // TODO(#135): update zulipFeatureLevel with events
 
+  final String queueId;
   UpdateMachine? get updateMachine => _updateMachine;
   UpdateMachine? _updateMachine;
   set updateMachine(UpdateMachine? value) {
@@ -802,16 +857,10 @@ class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, Channel
     }
   }
 
+  @override
   Future<void> sendMessage({required MessageDestination destination, required String content}) {
     assert(!_disposed);
-
-    // TODO implement outbox; see design at
-    //   https://chat.zulip.org/#narrow/stream/243-mobile-team/topic/.23M3881.20Sending.20outbox.20messages.20is.20fraught.20with.20issues/near/1405739
-    return _apiSendMessage(connection,
-      destination: destination,
-      content: content,
-      readBySender: true,
-    );
+    return _messages.sendMessage(destination: destination, content: content);
   }
 
   static List<CustomProfileField> _sortCustomProfileFields(List<CustomProfileField> initialCustomProfileFields) {
@@ -833,7 +882,6 @@ class PerAccountStore extends ChangeNotifier with EmojiStore, UserStore, Channel
   String toString() => '${objectRuntimeType(this, 'PerAccountStore')}#${shortHash(this)}';
 }
 
-const _apiSendMessage = sendMessage; // Bit ugly; for alternatives, see: https://chat.zulip.org/#narrow/stream/243-mobile-team/topic/flutter.3A.20PerAccountStore.20methods/near/1545809
 const _tryResolveUrl = tryResolveUrl;
 
 /// Like [Uri.resolve], but on failure return null instead of throwing.
@@ -1004,12 +1052,7 @@ class UpdateMachine {
   UpdateMachine.fromInitialSnapshot({
     required this.store,
     required InitialSnapshot initialSnapshot,
-  }) : queueId = initialSnapshot.queueId ?? (() {
-         // The queueId is optional in the type, but should only be missing in the
-         // case of unauthenticated access to a web-public realm.  We authenticated.
-         throw Exception("bad initial snapshot: missing queueId");
-       })(),
-       lastEventId = initialSnapshot.lastEventId {
+  }) : lastEventId = initialSnapshot.lastEventId {
     store.updateMachine = this;
   }
 
@@ -1023,8 +1066,8 @@ class UpdateMachine {
   ///
   /// In the future this might load an old snapshot from local storage first.
   static Future<UpdateMachine> load(GlobalStore globalStore, int accountId) async {
-    Account account = globalStore.getAccount(accountId)!;
-    final connection = globalStore.apiConnectionFromAccount(account);
+    final connection = globalStore.apiConnectionFromAccount(
+      globalStore.getAccount(accountId)!);
 
     void stopAndThrowIfNoAccount() {
       final account = globalStore.getAccount(accountId);
@@ -1036,21 +1079,29 @@ class UpdateMachine {
     }
 
     final stopwatch = Stopwatch()..start();
-    final initialSnapshot = await _registerQueueWithRetry(connection,
-      stopAndThrowIfNoAccount: stopAndThrowIfNoAccount);
+    InitialSnapshot? initialSnapshot;
+    try {
+      initialSnapshot = await _registerQueueWithRetry(connection,
+        stopAndThrowIfNoAccount: stopAndThrowIfNoAccount);
+    } on _ServerVersionUnsupportedException catch (e) {
+      // `!` is OK because _registerQueueWithRetry would have thrown a
+      // not-_ServerVersionUnsupportedException if no account
+      final account = globalStore.getAccount(accountId)!;
+      if (!e.data.matchesAccount(account)) {
+        await globalStore.updateZulipVersionData(accountId, e.data);
+      }
+      connection.close();
+      rethrow;
+    }
     if (kProfileMode) {
       profilePrint("initial fetch time: ${stopwatch.elapsed.inMilliseconds}ms");
     }
 
-    if (initialSnapshot.zulipVersion != account.zulipVersion
-        || initialSnapshot.zulipMergeBase != account.zulipMergeBase
-        || initialSnapshot.zulipFeatureLevel != account.zulipFeatureLevel) {
-      account = await globalStore.updateAccount(accountId, AccountsCompanion(
-        zulipVersion: Value(initialSnapshot.zulipVersion),
-        zulipMergeBase: Value(initialSnapshot.zulipMergeBase),
-        zulipFeatureLevel: Value(initialSnapshot.zulipFeatureLevel),
-      ));
-      connection.zulipFeatureLevel = initialSnapshot.zulipFeatureLevel;
+    final zulipVersionData = ZulipVersionData.fromInitialSnapshot(initialSnapshot);
+    // `!` is OK because _registerQueueWithRetry would have thrown if no account
+    if (!zulipVersionData.matchesAccount(globalStore.getAccount(accountId)!)) {
+      await globalStore.updateZulipVersionData(accountId, zulipVersionData);
+      connection.zulipFeatureLevel = zulipVersionData.zulipFeatureLevel;
     }
 
     final store = PerAccountStore.fromInitialSnapshot(
@@ -1075,7 +1126,6 @@ class UpdateMachine {
   }
 
   final PerAccountStore store;
-  final String queueId;
   int lastEventId;
 
   bool _disposed = false;
@@ -1095,7 +1145,12 @@ class UpdateMachine {
       } catch (e, s) {
         stopAndThrowIfNoAccount();
         // TODO(#890): tell user if initial-fetch errors persist, or look non-transient
+        final ZulipVersionData? zulipVersionData;
         switch (e) {
+          case MalformedServerResponseException()
+            when (zulipVersionData = ZulipVersionData.fromMalformedServerResponseException(e))
+              ?.isUnsupported == true:
+            throw _ServerVersionUnsupportedException(zulipVersionData!);
           case HttpException(httpStatus: 401):
             // We cannot recover from this error through retrying.
             // Leave it to [GlobalStore.loadPerAccount].
@@ -1113,6 +1168,10 @@ class UpdateMachine {
       }
       if (result != null) {
         stopAndThrowIfNoAccount();
+        final zulipVersionData = ZulipVersionData.fromInitialSnapshot(result);
+        if (zulipVersionData.isUnsupported) {
+          throw _ServerVersionUnsupportedException(zulipVersionData);
+        }
         return result;
       }
     }
@@ -1216,7 +1275,7 @@ class UpdateMachine {
         final GetEventsResult result;
         try {
           result = await getEvents(store.connection,
-            queueId: queueId, lastEventId: lastEventId);
+            queueId: store.queueId, lastEventId: lastEventId);
           if (_disposed) return;
         } catch (e, stackTrace) {
           if (_disposed) return;
@@ -1518,6 +1577,58 @@ class UpdateMachine {
 
   @override
   String toString() => '${objectRuntimeType(this, 'UpdateMachine')}#${shortHash(this)}';
+}
+
+/// The fields 'zulip_version', 'zulip_merge_base', and 'zulip_feature_level'
+/// from a /register response.
+class ZulipVersionData {
+  const ZulipVersionData({
+    required this.zulipVersion,
+    required this.zulipMergeBase,
+    required this.zulipFeatureLevel,
+  });
+
+  factory ZulipVersionData.fromInitialSnapshot(InitialSnapshot initialSnapshot) =>
+    ZulipVersionData(
+      zulipVersion: initialSnapshot.zulipVersion,
+      zulipMergeBase: initialSnapshot.zulipMergeBase,
+      zulipFeatureLevel: initialSnapshot.zulipFeatureLevel);
+
+  /// Make a [ZulipVersionData] from a [MalformedServerResponseException],
+  /// if the body was readable/valid JSON and contained the data, else null.
+  ///
+  /// If there's a zulip_version but no zulip_feature_level,
+  /// we infer it's indeed a Zulip server,
+  /// just an ancient one before feature levels were introduced in Zulip 3.0,
+  /// and we set 0 for zulipFeatureLevel.
+  static ZulipVersionData? fromMalformedServerResponseException(MalformedServerResponseException e) {
+    try {
+      final data = e.data!;
+      return ZulipVersionData(
+        zulipVersion: data['zulip_version'] as String,
+        zulipMergeBase: data['zulip_merge_base'] as String?,
+        zulipFeatureLevel: data['zulip_feature_level'] as int? ?? 0);
+    } catch (inner) {
+      return null;
+    }
+  }
+
+  final String zulipVersion;
+  final String? zulipMergeBase;
+  final int zulipFeatureLevel;
+
+  bool matchesAccount(Account account) =>
+    zulipVersion == account.zulipVersion
+    && zulipMergeBase == account.zulipMergeBase
+    && zulipFeatureLevel == account.zulipFeatureLevel;
+
+  bool get isUnsupported => zulipFeatureLevel < kMinSupportedZulipFeatureLevel;
+}
+
+class _ServerVersionUnsupportedException implements Exception {
+  final ZulipVersionData data;
+
+  _ServerVersionUnsupportedException(this.data);
 }
 
 class _EventHandlingException implements Exception {
