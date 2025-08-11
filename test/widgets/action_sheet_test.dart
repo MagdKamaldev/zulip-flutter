@@ -244,11 +244,15 @@ void main() {
       check(findButtonForLabel(label)).findsOne();
     }
 
+    void checkNoButton(String label) {
+      check(findButtonForLabel(label)).findsNothing();
+    }
+
     group('showChannelActionSheet', () {
       void checkButtons() {
         check(actionSheetFinder).findsOne();
-        checkButton('List of topics');
         checkButton('Mark channel as read');
+        checkButton('List of topics');
         checkButton('Copy link to channel');
       }
 
@@ -291,17 +295,45 @@ void main() {
       });
     });
 
-    testWidgets('TopicListButton', (tester) async {
-      await prepare();
-      await showFromAppBar(tester,
-        narrow: ChannelNarrow(someChannel.streamId));
+    group('SubscribeButton', () {
+      Future<void> tapButton(WidgetTester tester) async {
+        await tester.tap(findButtonForLabel('Subscribe'));
+        await tester.pump(); // [MenuItemButton.onPressed] called in a post-frame callback: flutter/flutter@e4a39fa2e
+      }
 
-      connection.prepare(json: GetStreamTopicsResult(topics: [
-        eg.getStreamTopicsEntry(name: 'some topic foo'),
-      ]).toJson());
-      await tester.tap(findButtonForLabel('List of topics'));
-      await tester.pumpAndSettle();
-      check(find.text('some topic foo')).findsOne();
+      testWidgets('channel not subscribed', (tester) async {
+        await prepare();
+        final narrow = ChannelNarrow(someChannel.streamId);
+        await store.removeSubscription(narrow.streamId);
+        await showFromAppBar(tester, narrow: narrow);
+        checkButton('Subscribe');
+      });
+
+      testWidgets('channel subscribed', (tester) async {
+        await prepare();
+        final narrow = ChannelNarrow(someChannel.streamId);
+        check(store.subscriptions[narrow.streamId]).isNotNull();
+        await showFromAppBar(tester, narrow: narrow);
+        checkNoButton('Subscribe');
+      });
+
+      testWidgets('smoke', (tester) async {
+        await prepare();
+        final narrow = ChannelNarrow(someChannel.streamId);
+        await store.removeSubscription(narrow.streamId);
+        await showFromAppBar(tester, narrow: narrow);
+
+        connection.prepare(json: {});
+        await tapButton(tester);
+        await tester.pump(Duration.zero);
+
+        check(connection.lastRequest).isA<http.Request>()
+          ..method.equals('POST')
+          ..url.path.equals('/api/v1/users/me/subscriptions')
+          ..bodyFields.deepEquals({
+            'subscriptions': jsonEncode([{'name': someChannel.name}]),
+          });
+      });
     });
 
     group('MarkChannelAsReadButton', () {
@@ -335,7 +367,7 @@ void main() {
         await tester.tap(findButtonForLabel('Mark channel as read'));
         await tester.pumpAndSettle();
         checkRequest(someChannel.streamId);
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
       });
 
       testWidgets('request fails', (tester) async {
@@ -348,6 +380,19 @@ void main() {
         checkErrorDialog(tester,
           expectedTitle: "Mark as read failed");
       });
+    });
+
+    testWidgets('TopicListButton', (tester) async {
+      await prepare();
+      await showFromAppBar(tester,
+        narrow: ChannelNarrow(someChannel.streamId));
+
+      connection.prepare(json: GetStreamTopicsResult(topics: [
+        eg.getStreamTopicsEntry(name: 'some topic foo'),
+      ]).toJson());
+      await tester.tap(findButtonForLabel('List of topics'));
+      await tester.pumpAndSettle();
+      check(find.text('some topic foo')).findsOne();
     });
 
     group('CopyChannelLinkButton', () {
@@ -373,6 +418,84 @@ void main() {
         await tester.pump(Duration.zero);
         final expectedLink = narrowLink(store, narrow).toString();
         check(await Clipboard.getData('text/plain')).isNotNull().text.equals(expectedLink);
+      });
+    });
+
+    group('UnsubscribeButton', () {
+      Future<void> tapButton(WidgetTester tester) async {
+        await tester.ensureVisible(findButtonForLabel('Unsubscribe'));
+        await tester.tap(findButtonForLabel('Unsubscribe'));
+        await tester.pump(); // [MenuItemButton.onPressed] called in a post-frame callback: flutter/flutter@e4a39fa2e
+      }
+
+      testWidgets('channel subscribed', (tester) async {
+        await prepare();
+        final narrow = ChannelNarrow(someChannel.streamId);
+        check(store.subscriptions[narrow.streamId]).isNotNull();
+        await showFromAppBar(tester, narrow: narrow);
+        checkButton('Unsubscribe');
+      });
+
+      testWidgets('channel not subscribed', (tester) async {
+        await prepare();
+        final narrow = ChannelNarrow(someChannel.streamId);
+        await store.removeSubscription(narrow.streamId);
+        await showFromAppBar(tester, narrow: narrow);
+        checkNoButton('Unsubscribe');
+      });
+
+      testWidgets('smoke, public channel', (tester) async {
+        final channel = eg.stream(inviteOnly: false);
+        final message = eg.streamMessage(stream: channel);
+        await prepare();
+        await store.addStream(channel);
+        await store.addSubscription(eg.subscription(channel));
+        final narrow = ChannelNarrow(channel.streamId);
+        await showFromAppBar(tester,
+          channel: channel, narrow: narrow, messages: [message]);
+
+        connection.prepare(json: {});
+        await tapButton(tester);
+        await tester.pump(Duration.zero);
+
+        checkNoDialog(tester);
+
+        check(connection.lastRequest).isA<http.Request>()
+          ..method.equals('DELETE')
+          ..url.path.equals('/api/v1/users/me/subscriptions')
+          ..bodyFields.deepEquals({
+            'subscriptions': jsonEncode([channel.name]),
+          });
+      });
+
+      testWidgets('smoke, private channel', (tester) async {
+        final channel = eg.stream(inviteOnly: true);
+        final message = eg.streamMessage(stream: channel);
+        await prepare();
+        await store.addStream(channel);
+        await store.addSubscription(eg.subscription(channel));
+        final narrow = ChannelNarrow(channel.streamId);
+        await showFromAppBar(tester,
+          channel: channel, narrow: narrow, messages: [message]);
+        connection.takeRequests();
+
+        connection.prepare(json: {});
+        await tapButton(tester);
+        await tester.pump();
+
+        final (unsubscribeButton, cancelButton) = checkSuggestedActionDialog(tester,
+          expectedTitle: 'Unsubscribe from ${channel.name}?',
+          expectedMessage: 'Once you leave this channel, you might not be able to rejoin.',
+          expectedActionButtonText: 'Unsubscribe');
+        await tester.tap(find.byWidget(unsubscribeButton));
+        await tester.pump(Duration.zero);
+
+        check(connection.takeRequests()).single.isA<http.Request>()
+          ..method.equals('DELETE')
+          ..url.path.equals('/api/v1/users/me/subscriptions')
+          ..bodyFields.deepEquals({
+            'subscriptions': jsonEncode([channel.name]),
+          });
       });
     });
   });
@@ -776,7 +899,7 @@ void main() {
         await tester.tap(findButtonForLabel('Mark as resolved'));
         await tester.pumpAndSettle();
 
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
         checkRequest(message.id, '✔ zulip');
       });
 
@@ -791,7 +914,7 @@ void main() {
         await tester.tap(findButtonForLabel('Mark as resolved'));
         await tester.pumpAndSettle();
 
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
         checkRequest(message.id, '✔ zulip');
       });
 
@@ -805,7 +928,7 @@ void main() {
         await tester.tap(findButtonForLabel('Mark as unresolved'));
         await tester.pumpAndSettle();
 
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
         checkRequest(message.id, 'zulip');
       });
 
@@ -819,7 +942,7 @@ void main() {
         await tester.tap(findButtonForLabel('Mark as unresolved'));
         await tester.pumpAndSettle();
 
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
         checkRequest(message.id, 'zulip');
       });
 
