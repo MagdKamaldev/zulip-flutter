@@ -28,6 +28,7 @@ import 'presence.dart';
 import 'realm.dart';
 import 'recent_dm_conversations.dart';
 import 'recent_senders.dart';
+import 'server_support.dart';
 import 'channel.dart';
 import 'saved_snippet.dart';
 import 'settings.dart';
@@ -208,7 +209,7 @@ abstract class GlobalStore extends ChangeNotifier {
       assert(account != null); // doLoadPerAccount would have thrown AccountNotFoundException
       final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
       switch (e) {
-        case _ServerVersionUnsupportedException():
+        case ServerVersionUnsupportedException():
           reportErrorToUserModally(
             zulipLocalizations.errorCouldNotConnectTitle,
             message: zulipLocalizations.errorServerVersionUnsupportedMessage(
@@ -480,14 +481,32 @@ class PerAccountStore extends PerAccountStoreBase with
       accountId: accountId,
       selfUserId: account.userId,
     );
-    final realm = RealmStoreImpl(core: core, initialSnapshot: initialSnapshot);
-    final users = UserStoreImpl(realm: realm, initialSnapshot: initialSnapshot);
+
+    final userMap = UserStoreImpl.userMapFromInitialSnapshot(initialSnapshot);
+    final selfUser = userMap[core.selfUserId];
+    if (selfUser == null) {
+      final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
+      reportErrorToUserModally(
+        zulipLocalizations.errorCouldNotConnectTitle,
+        message: zulipLocalizations.errorMalformedResponseWithCause(200,
+          // skip-i18n: This would be an unlikely bug (in the server?).  We're
+          //   showing the user these details at all only because it would be a
+          //   very nasty bug (so, important to resolve ASAP) if it ever did happen.
+          'self-user missing from user list'));
+      throw Exception("bad initial snapshot: self-user missing from user list");
+    }
+
+    final groups = UserGroupStoreImpl(core: core,
+      groups: initialSnapshot.realmUserGroups);
+    final realm = RealmStoreImpl(groups: groups, initialSnapshot: initialSnapshot,
+      selfUser: selfUser);
+    final users = UserStoreImpl(realm: realm, initialSnapshot: initialSnapshot,
+      userMap: userMap);
     final channels = ChannelStoreImpl(users: users,
       initialSnapshot: initialSnapshot);
     return PerAccountStore._(
       core: core,
-      groups: UserGroupStoreImpl(core: core,
-        groups: initialSnapshot.realmUserGroups),
+      groups: groups,
       realm: realm,
       emoji: EmojiStoreImpl(core: core,
         allRealmEmoji: initialSnapshot.realmEmoji),
@@ -740,6 +759,8 @@ class PerAccountStore extends PerAccountStoreBase with
 
       case RealmUserUpdateEvent():
         assert(debugLog("server event: realm_user/update"));
+        _groups.handleRealmUserUpdateEvent(event);
+        _realm.handleRealmUserUpdateEvent(event);
         _users.handleRealmUserEvent(event);
         autocompleteViewManager.handleRealmUserUpdateEvent(event);
         notifyListeners();
@@ -813,7 +834,8 @@ class PerAccountStore extends PerAccountStoreBase with
         typingStatus.handleTypingEvent(event);
 
       case PresenceEvent():
-        // TODO handle
+        assert(debugLog("server event: presence ${event.userId}"));
+        // TODO(#1618) handle
         break;
 
       case ReactionEvent():
@@ -1026,9 +1048,9 @@ class UpdateMachine {
     try {
       initialSnapshot = await _registerQueueWithRetry(connection,
         stopAndThrowIfNoAccount: stopAndThrowIfNoAccount);
-    } on _ServerVersionUnsupportedException catch (e) {
+    } on ServerVersionUnsupportedException catch (e) {
       // `!` is OK because _registerQueueWithRetry would have thrown a
-      // not-_ServerVersionUnsupportedException if no account
+      // not-ServerVersionUnsupportedException if no account
       final account = globalStore.getAccount(accountId)!;
       if (!e.data.matchesAccount(account)) {
         await globalStore.updateZulipVersionData(accountId, e.data);
@@ -1094,7 +1116,7 @@ class UpdateMachine {
           case MalformedServerResponseException()
             when (zulipVersionData = ZulipVersionData.fromMalformedServerResponseException(e))
               ?.isUnsupported == true:
-            throw _ServerVersionUnsupportedException(zulipVersionData!);
+            throw ServerVersionUnsupportedException(zulipVersionData!);
           case HttpException(httpStatus: 401):
             // We cannot recover from this error through retrying.
             // Leave it to [GlobalStore.loadPerAccount].
@@ -1114,7 +1136,7 @@ class UpdateMachine {
         stopAndThrowIfNoAccount();
         final zulipVersionData = ZulipVersionData.fromInitialSnapshot(result);
         if (zulipVersionData.isUnsupported) {
-          throw _ServerVersionUnsupportedException(zulipVersionData);
+          throw ServerVersionUnsupportedException(zulipVersionData);
         }
         return result;
       }
@@ -1442,10 +1464,10 @@ class UpdateMachine {
   }
 
   void _reportToUserErrorConnectingToServer(Object error) {
-    final localizations = GlobalLocalizations.zulipLocalizations;
+    final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
     reportErrorToUserBriefly(
-      localizations.errorConnectingToServerShort,
-      details: localizations.errorConnectingToServerDetails(
+      zulipLocalizations.errorConnectingToServerShort,
+      details: zulipLocalizations.errorConnectingToServerDetails(
         store.realmUrl.toString(), error.toString()));
   }
 
@@ -1527,58 +1549,6 @@ class UpdateMachine {
 
   @override
   String toString() => '${objectRuntimeType(this, 'UpdateMachine')}#${shortHash(this)}';
-}
-
-/// The fields 'zulip_version', 'zulip_merge_base', and 'zulip_feature_level'
-/// from a /register response.
-class ZulipVersionData {
-  const ZulipVersionData({
-    required this.zulipVersion,
-    required this.zulipMergeBase,
-    required this.zulipFeatureLevel,
-  });
-
-  factory ZulipVersionData.fromInitialSnapshot(InitialSnapshot initialSnapshot) =>
-    ZulipVersionData(
-      zulipVersion: initialSnapshot.zulipVersion,
-      zulipMergeBase: initialSnapshot.zulipMergeBase,
-      zulipFeatureLevel: initialSnapshot.zulipFeatureLevel);
-
-  /// Make a [ZulipVersionData] from a [MalformedServerResponseException],
-  /// if the body was readable/valid JSON and contained the data, else null.
-  ///
-  /// If there's a zulip_version but no zulip_feature_level,
-  /// we infer it's indeed a Zulip server,
-  /// just an ancient one before feature levels were introduced in Zulip 3.0,
-  /// and we set 0 for zulipFeatureLevel.
-  static ZulipVersionData? fromMalformedServerResponseException(MalformedServerResponseException e) {
-    try {
-      final data = e.data!;
-      return ZulipVersionData(
-        zulipVersion: data['zulip_version'] as String,
-        zulipMergeBase: data['zulip_merge_base'] as String?,
-        zulipFeatureLevel: data['zulip_feature_level'] as int? ?? 0);
-    } catch (inner) {
-      return null;
-    }
-  }
-
-  final String zulipVersion;
-  final String? zulipMergeBase;
-  final int zulipFeatureLevel;
-
-  bool matchesAccount(Account account) =>
-    zulipVersion == account.zulipVersion
-    && zulipMergeBase == account.zulipMergeBase
-    && zulipFeatureLevel == account.zulipFeatureLevel;
-
-  bool get isUnsupported => zulipFeatureLevel < kMinSupportedZulipFeatureLevel;
-}
-
-class _ServerVersionUnsupportedException implements Exception {
-  final ZulipVersionData data;
-
-  _ServerVersionUnsupportedException(this.data);
 }
 
 class _EventHandlingException implements Exception {

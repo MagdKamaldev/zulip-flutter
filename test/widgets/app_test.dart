@@ -281,7 +281,8 @@ void main() {
     testWidgets('choosing an account clears the navigator stack', (tester) async {
       addTearDown(testBinding.reset);
       await testBinding.globalStore.add(eg.selfAccount, eg.initialSnapshot());
-      await testBinding.globalStore.add(eg.otherAccount, eg.initialSnapshot());
+      await testBinding.globalStore.add(eg.otherAccount, eg.initialSnapshot(
+        realmUsers: [eg.otherUser]));
 
       final pushedRoutes = <Route<void>>[];
       final poppedRoutes = <Route<void>>[];
@@ -401,14 +402,14 @@ void main() {
       check(ZulipApp.ready).value.isFalse();
       await tester.pump();
       check(findSnackBarByText(message).evaluate()).isEmpty();
-      checkNoErrorDialog(tester);
+      checkNoDialog(tester);
 
       check(ZulipApp.ready).value.isTrue();
       // After app startup, reportErrorToUserBriefly displays a SnackBar.
       reportErrorToUserBriefly(message, details: details);
       await tester.pumpAndSettle();
       check(findSnackBarByText(message).evaluate()).single;
-      checkNoErrorDialog(tester);
+      checkNoDialog(tester);
 
       // Open the error details dialog.
       await tester.tap(find.text('Details'));
@@ -493,7 +494,7 @@ void main() {
       reportErrorToUserModally(title, message: message);
       check(ZulipApp.ready).value.isFalse();
       await tester.pump();
-      checkNoErrorDialog(tester);
+      checkNoDialog(tester);
 
       check(ZulipApp.ready).value.isTrue();
       // After app startup, reportErrorToUserModally displays an [AlertDialog].
