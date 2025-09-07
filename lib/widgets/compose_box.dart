@@ -1238,6 +1238,63 @@ class _AttachFromCameraButton extends _AttachUploadsButton {
   }
 }
 
+class _MoreButton extends StatefulWidget {
+  const _MoreButton();
+
+  @override
+  State<_MoreButton> createState() => __MoreButtonState();
+}
+
+class __MoreButtonState extends State<_MoreButton> {
+  void showMoreDialog(BuildContext context, DesignVariables designVariables) {
+  showDialog<void>(
+    context: context,
+    builder: (context) {
+      return Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(ZulipIcons.calendar, color: designVariables.icon),
+              title: const Text("Schedule message"),
+              onTap: () {
+                Navigator.pop(context);
+                debugPrint("Schedule message tapped");
+              },
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+
+  @override
+  Widget build(BuildContext context) {
+    final designVariables = DesignVariables.of(context);
+
+    return SizedBox(
+      width: _composeButtonSize,
+      child: IconButton(
+        tooltip: "More options",
+        icon: Icon(
+          ZulipIcons.more_horizontal,
+          color: designVariables.foreground.withFadedAlpha(0.5),
+        ),
+        onPressed: () {
+          showMoreDialog(context,designVariables);
+        },
+      ),
+    );
+  }
+}
+
+
 class _SendButton extends StatefulWidget {
   const _SendButton({required this.controller, required this.getDestination});
 
@@ -1438,6 +1495,7 @@ abstract class _ComposeBoxBody extends StatelessWidget {
   Widget buildContentInput();
   bool getComposeButtonsEnabled(BuildContext context);
   Widget? buildSendButton();
+  Widget buildMoreButton() => const _MoreButton();
 
   @override
   Widget build(BuildContext context) {
@@ -1472,6 +1530,9 @@ abstract class _ComposeBoxBody extends StatelessWidget {
 
     final topicInput = buildTopicInput();
     final sendButton = buildSendButton();
+    final moreButton = buildMoreButton();
+
+
     return Column(children: [
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1489,7 +1550,11 @@ abstract class _ComposeBoxBody extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Row(children: composeButtons),
+              Row(mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+              moreButton,
               if (sendButton != null) sendButton,
+              ],),
             ]))),
     ]);
   }
